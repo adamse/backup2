@@ -1,0 +1,91 @@
+#!/bin/bash
+
+# set -o xtrace
+
+ns="backup2"
+
+function size_full {
+    local snapshot="$1"
+    zfs send --parsable --raw -nv "$snapshot" | awk '/^size/ {print $2}'
+}
+
+function size_inc {
+    local snapshot_start="$1"
+    local snapshot_end="$2"
+    zfs send --parsable --raw -nv -i "$snapshot_start" "$snapshot_end" | awk '/^size/ {print $2}'
+}
+
+function newname {
+    date --utc "+$ns-%Y-%m-%dT%H-%M-%S"
+}
+
+function init {
+    set -o errexit
+    set -o pipefail
+    local dataset_from="$1"
+    local dataset_to="$2"
+    local name
+    name=$(newname)
+    local snapshot_from="${dataset_from}@${name}"
+    local snapshot_to="${dataset_to}@${name}"
+    if zfs list "$dataset_to" >/dev/null 2>&1; then
+        echo "error: destination dataset already exist"
+        exit 1
+    fi
+    zfs snapshot "$snapshot_from"
+    zfs hold $ns "$snapshot_from"
+    local transfer_size
+    transfer_size=$(size_full "$snapshot_from")
+    # --raw to send encrypted data w/o decrypt/encrypt roundtrip
+    zfs send --raw "$snapshot_from" | pv --size "$transfer_size" | zfs receive "$snapshot_to"
+    zfs set readonly=on "$dataset_to"
+    zfs set atime=off "$dataset_to"
+    zfs set "${ns}:snapshot_last=$name" "$dataset_to"
+    exit 0
+}
+
+function incremental {
+    set -o errexit
+    set -o pipefail
+    local dataset_from="$1"
+    local dataset_to="$2"
+    local name_last="$3"
+    local name
+    name=$(newname)
+    local snapshot_last="${dataset_from}@${name_last}"
+    local snapshot_from="${dataset_from}@${name}"
+    local snapshot_to="${dataset_to}@${name}"
+    # create new snapshot
+    zfs snapshot "$snapshot_from"
+    # hold this snapshot for deletion
+    zfs hold $ns "$snapshot_from"
+    local transfer_size
+    transfer_size=$(size_inc "$snapshot_last" "$snapshot_from")
+    zfs send --raw -i "$snapshot_last" "$snapshot_from" | pv --size "$transfer_size" | zfs receive "$snapshot_to"
+    zfs set "${ns}:snapshot_last=$name" "$dataset_to"
+    # release previous snapshot for deletion
+    zfs release $ns "$snapshot_last"
+    exit 0
+}
+
+dataset_from="rpool/home"
+dataset_to="storage/backup2/tpa-home"
+
+if [[ "$1" == "init" ]]; then
+    init "$dataset_from" "$dataset_to"
+    exit 0
+fi
+
+if ! zfs list "$dataset_to" >/dev/null 2>&1; then
+    echo "error: destination dataset doesn't exist, rerun with init:"
+    echo "$0 init" "${@}"
+    exit 1
+fi
+
+snapshot_last=$(zfs get -H -o value "$ns:snapshot_last" "$dataset_to")
+if [[ "$snapshot_last" == "-" ]]; then
+    echo "destination dataset exists but no snapshot name from last backup found, use other to dataset?"
+    exit 1
+fi
+
+incremental "$dataset_from" "$dataset_to" "$snapshot_last"
