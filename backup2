@@ -68,17 +68,70 @@ function incremental {
     exit 0
 }
 
-dataset_from="rpool/home"
-dataset_to="storage/backup2/tpa-home"
+function usage {
+    echo "usage: $0 [--init] --from dataset/from --to dataset/to"
+}
 
-if [[ "$1" == "init" ]]; then
+do_init=false
+dataset_from=""
+dataset_to=""
+original_args=( "${@}" )
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --init)
+            do_init=true
+            shift
+            ;;
+        --from)
+            shift
+            dataset_from="$1"
+            shift
+            ;;
+        --to)
+            shift
+            dataset_to="$1"
+            shift
+            ;;
+        -h|--help)
+            usage
+            exit 1
+            ;;
+        *)
+            echo "unknown arg: $1"
+            usage
+            exit 1
+            ;;
+    esac
+done
+
+if [[ $dataset_from = "" ]]; then
+    echo "missing --from dataset"
+    usage
+    exit 1
+fi
+if [[ $dataset_to = "" ]]; then
+    echo "missing --to dataset"
+    usage
+    exit 1
+fi
+
+if $do_init; then 
+    echo "init: yes" 
+else
+    echo "init: no" 
+fi
+echo "from: $dataset_from"
+echo "to:   $dataset_to"
+
+if $do_init; then
     init "$dataset_from" "$dataset_to"
     exit 0
 fi
 
 if ! zfs list "$dataset_to" >/dev/null 2>&1; then
-    echo "error: destination dataset doesn't exist, rerun with init:"
-    echo "$0 init" "${@}"
+    echo "error: destination dataset doesn't exist, rerun with --init:"
+    echo "$0 --init" "${original_args[@]}"
     exit 1
 fi
 
