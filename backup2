@@ -141,4 +141,6 @@ if [[ "$snapshot_last" == "-" ]]; then
     exit 1
 fi
 
+echo "last backup for $dataset_from was $snapshot_last"
+
 incremental "$dataset_from" "$dataset_to" "$snapshot_last"
